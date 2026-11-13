@@ -17,6 +17,7 @@ struct HostedConnectRequest {
     var onLevels: ((Double, Double) -> Void)?
     var onFailure: ((String) -> Void)?
     var onHostedLease: ((HostedLease) -> Void)?
+    var onPrivateCloseFailure: ((String, String) -> Void)?
     private var factory: RTCPeerConnectionFactory?
     private var peer: RTCPeerConnection?
     private var channel: RTCDataChannel?
@@ -38,12 +39,22 @@ struct HostedConnectRequest {
     private var hostedLease: HostedLease?
     private var hostedClient: HostedClient?
     private var hostedCloseRequested = false
+    private var privateLease: PrivateChatLease?
+    private var privateClient: PrivateChatClient?
+    private var privateCloseRequested = false
 
-    func connect(api: APIClient, instructions: String, history: [[String: Any]], hosted: HostedConnectRequest? = nil) async throws {
+    func connect(api: APIClient, instructions: String, history: [[String: Any]], hosted: HostedConnectRequest? = nil,
+                 language: String = "en-US") async throws {
         disconnect()
         closing = false
         hostedCloseRequested = false
+        privateCloseRequested = false
         let token = UUID(); attempt = token
+        if api.conversationProvider == .privateServer {
+            try await api.privateChat.loadCapabilities()
+            try Task.checkCancellation()
+            guard attempt == token else { throw CancellationError() }
+        }
         let granted = await AVAudioApplication.requestRecordPermission()
         guard granted else { throw TransportError.microphone }
         try Task.checkCancellation()
@@ -106,6 +117,19 @@ struct HostedConnectRequest {
             onHostedLease?(lease)
             answer = lease.answerSDP
             onEvent?(["type": "mural.session.created", "session": ["id": lease.providerSessionID]])
+        } else if api.conversationProvider == .privateServer {
+            let client = api.privateChat
+            let lease = try await client.create(sdp: sdp, language: language, instructions: instructions, history: history)
+            guard attempt == token, !Task.isCancelled else {
+                let report = onPrivateCloseFailure
+                client.close(lease) { message in
+                    if let message { report?(lease.providerID, message) }
+                }
+                throw CancellationError()
+            }
+            privateLease = lease; privateClient = client
+            answer = lease.answerSDP
+            onEvent?(["type": "mural.session.created", "session": ["id": lease.providerID]])
         } else {
             let result = try await api.post("live/sessions", body: [
                 "session": ["model": "gpt-live-1", "instructions": instructions, "input": history,
@@ -144,11 +168,14 @@ struct HostedConnectRequest {
         closing = true; localTrack?.isEnabled = false; isMuted = true
         _ = send(["type": "session.close", "event_id": UUID().uuidString])
         closeHostedSession()
+        closePrivateSession()
     }
     func disconnect() {
         networkRecovery.connected()
         closeHostedSession()
+        closePrivateSession()
         hostedLease = nil; hostedClient = nil
+        privateLease = nil; privateClient = nil
         attempt = UUID(); meterTask?.cancel(); meterTask = nil
         started = false; closing = true
         localTrack?.isEnabled = false; localTrack = nil
@@ -165,6 +192,14 @@ struct HostedConnectRequest {
         guard !hostedCloseRequested, let lease = hostedLease, hostedClient != nil else { return }
         hostedCloseRequested = true
         HostedCloseRecovery.shared.close(lease)
+    }
+    private func closePrivateSession() {
+        guard !privateCloseRequested, let lease = privateLease, let client = privateClient else { return }
+        privateCloseRequested = true
+        let report = onPrivateCloseFailure
+        client.close(lease) { message in
+            if let message { report?(lease.providerID, message) }
+        }
     }
     private func startMetering() {
         meterTask?.cancel()

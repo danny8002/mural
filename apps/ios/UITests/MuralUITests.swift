@@ -511,6 +511,22 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["start-conversation"].exists)
     }
 
+    func testPrivateServerOffersSeparateMaskedAPIKEYAndServerOnlySigningGuidance() {
+        let app = launch()
+        app.buttons["Settings"].tap()
+        let access = app.buttons["settings-conversation-access"]
+        for _ in 0..<4 where !access.isHittable { app.swipeUp() }
+        access.tap()
+        app.buttons["Private server"].tap()
+        XCTAssertTrue(app.secureTextFields["private-server-apikey"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.secureTextFields["api-key"].exists)
+        XCTAssertTrue(app.staticTexts["https://mural-simple-chat-service.onrender.com"].exists)
+        XCTAssertTrue(app.buttons["private-server-save-key"].exists)
+        let guidance = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "SESSION_SIGNING_SECRET is server-only")).firstMatch
+        for _ in 0..<3 where !guidance.exists { app.swipeUp() }
+        XCTAssertTrue(guidance.exists)
+    }
+
     func testPersonalKeyKeepsAccountFreeOfMuralMetersAndUsesQuietActions() {
         let app = XCUIApplication()
         app.launchArguments = ["--preview", "--preview-key", "--preview-apple", "--preview-purchases"]

@@ -106,13 +106,14 @@ import MuralCore
             conversationProvider = ProcessInfo.processInfo.arguments.contains("--preview-key") ? .personalKey : .hosted
         } else {
             conversationProvider = savedProvider.flatMap(ConversationProvider.init(rawValue:))
-                ?? (CredentialStore.hasKey ? .personalKey : .hosted)
+                ?? .privateServer
         }
         #else
         conversationProvider = savedProvider.flatMap(ConversationProvider.init(rawValue:))
-            ?? (CredentialStore.hasKey ? .personalKey : .hosted)
+            ?? .privateServer
         #endif
         let api = APIClient(); self.api = api
+        api.conversationProvider = conversationProvider
         api.canProcessAI = { store.preferences.aiConsentVersion == AIProcessingConsent.version || AudioVerification.requested }
         finalAssessments = FinalAssessmentQueue { snapshot, passage in
             guard store.preferences.aiConsentVersion == AIProcessingConsent.version || AudioVerification.requested else { throw AIProcessingConsent.ConsentError.required }
@@ -155,6 +156,10 @@ import MuralCore
             guard let self, self.isRunning else { return }
             self.api.hostedLease = lease
         }
+        transport.onPrivateCloseFailure = { [weak self] providerID, message in
+            guard let self, self.session?.providerID == providerID else { return }
+            self.notice = message
+        }
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, raw == AVAudioSession.InterruptionType.began.rawValue else { return }
             Task { @MainActor in self?.end(reason: "Audio interrupted") }
@@ -186,6 +191,9 @@ import MuralCore
         if ProcessInfo.processInfo.arguments.contains("--preview") { showSettings = true; return }
         #endif
         guard conversationProvider != .personalKey || CredentialStore.hasKey else { requestAdvancedFocus = true; showSettings = true; return }
+        guard conversationProvider != .privateServer || PrivateChatCredentialStore.hasKey else {
+            requestAdvancedFocus = true; showSettings = true; return
+        }
         releaseBackgroundWork()
         cancelReset(); meanings.reset()
         error = nil; hostedAccessFailure = nil; notice = nil; lastAssessmentKey = ""
@@ -203,7 +211,7 @@ import MuralCore
         let instructions = TeachingPolicy.voice(language: language, learner: learner, theme: selectedTheme, interests: store.preferences.interests, meaningLanguage: store.preferences.meaningLanguage)
         api.conversationProvider = conversationProvider
         api.hostedLease = nil
-        if conversationProvider == .personalKey { api.beginVoiceCredential() }
+        if conversationProvider != .hosted { api.beginVoiceCredential() }
         connectionTask = Task { [weak self] in
             guard let self else { return }
             var checkingHostedAccess = self.conversationProvider == .hosted
@@ -233,7 +241,8 @@ import MuralCore
                 }
                 guard self.session?.id == generation, self.state == .connecting else { return }
                 checkingHostedAccess = false
-                try await self.transport.connect(api: self.api, instructions: instructions, history: history, hosted: hosted)
+                try await self.transport.connect(api: self.api, instructions: instructions, history: history, hosted: hosted,
+                                                 language: self.language.locale)
                 self.continuationSession = nil; self.continuationOwner = nil; self.continuationReady = false
                 UserDefaults.standard.removeObject(forKey: self.continuationKey)
             }
@@ -250,6 +259,7 @@ import MuralCore
     }
     func selectConversationProvider(_ provider: ConversationProvider) {
         guard !isRunning else { return }
+        api.cancelAIRequests(); meanings.reset(); finalAssessments.cancelAll()
         clearContinuation()
         conversationProvider = provider
         UserDefaults.standard.set(provider.rawValue, forKey: "mural.conversation-provider")
@@ -258,6 +268,11 @@ import MuralCore
         error = nil; hostedAccessFailure = nil; notice = nil
     }
     func clearPersonalKeyFailure() { personalKeyFailure = nil }
+    func privateServerKeyChanged() {
+        guard !isRunning else { return }
+        api.privateChat.clearCredential()
+        error = nil
+    }
     /// Checks the hosted wallet without selecting it or opening a voice lease.
     func hostedBalanceForSwitch() async -> HostedBalance? {
         #if DEBUG && targetEnvironment(simulator)
@@ -281,7 +296,7 @@ import MuralCore
             } else { member = nil }
             let owner = try await GuestAccess.shared.owner(member: member)
             let balance = try await client.balance(owner)
-            guard !isRunning, conversationProvider == .personalKey else { return nil }
+            guard !isRunning, conversationProvider != .hosted else { return nil }
             let currentMember: ManagedAccountSession?
             if let config = ManagedAccountConfiguration.load() {
                 currentMember = try ManagedAccountKeychain(scope: config.storageScope).load()
@@ -788,6 +803,9 @@ import MuralCore
                 try await Task.sleep(for: .milliseconds(500))
                 guard self.session?.id == snapshot.id, self.state == .active, let current = self.session else { return }
                 guard let targetLanguage = LanguageRegistry.module(for: current.languageID) else { return }
+                if self.conversationProvider == .privateServer && self.api.privateChat.capabilities?.webSearch != true {
+                    throw PrivateChatError.searchUnavailable
+                }
                 let result = try await self.api.respond(instructions: TeachingPolicy.delegation(language: targetLanguage), input: TeachingPolicy.context(current), search: current.searchCalls < 3, purpose: "delegation")
                 guard self.session?.id == snapshot.id, self.state == .active else { return }
                 self.addUsage(result.usage)

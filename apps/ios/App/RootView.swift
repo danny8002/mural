@@ -28,7 +28,8 @@ struct RootView: View {
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $coordinator.showAIConsent, onDismiss: { coordinator.resumeAfterAIConsent() }) {
-            AIConsentView(agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
+            AIConsentView(provider: coordinator.conversationProvider,
+                          agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
         }
         .fullScreenCover(isPresented: $onboarding) { OnboardingView(coordinator: coordinator) { coordinator.store.updatePreferences { $0.hasOnboarded = true }; onboarding = false } }
         .alert("A little interruption", isPresented: Binding(get: { coordinator.error != nil || coordinator.store.error != nil }, set: { if !$0 { coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil } })) {
@@ -36,6 +37,12 @@ struct RootView: View {
                 Button("Review in Advanced") {
                     coordinator.error = nil; coordinator.store.error = nil
                     coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
+                }
+                if coordinator.conversationProvider == .privateServer {
+                    Button("Review private server APIKEY") {
+                        coordinator.error = nil; coordinator.store.error = nil
+                        coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
+                    }
                 }
             }
             if let hostedFailure = coordinator.hostedAccessFailure {

@@ -1,15 +1,16 @@
 # How to run Mural on your iPhone
 
-Use this guide to install a personal build from source. After installation, the phone connects directly to OpenAI and works away from your Mac.
+Use this guide to install a personal build from source. After installation, the phone works away from your Mac. Conversation access can use the private Azure gateway, Mural minutes, or a personal OpenAI key.
 
 ## Before you start
 
 - A Mac with Xcode 26 or later, downloaded from Apple.
 - An iPhone running iOS 26.1 or later and a USB cable for initial setup.
 - An Apple Account added to **Xcode → Settings → Accounts**.
-- An OpenAI project with API billing enabled and access to the models configured in `apps/ios/App/APIClient.swift` and `apps/ios/App/LiveTransport.swift`.
+- For private-server access: the `APIKEY` from your deployed Render service. Azure model credentials are configured on the server, not on the iPhone.
+- Alternatively, for personal OpenAI-key access: an OpenAI project with API billing enabled and access to the models configured in `apps/ios/App/APIClient.swift` and `apps/ios/App/LiveTransport.swift`.
 
-OpenAI API usage is paid separately from ChatGPT. Use your own key for this personal build. Never add a key to source code, an Xcode build setting, a screenshot or a GitHub issue.
+Provider API usage is paid separately from ChatGPT. Never add a key to source code, an Xcode build setting, a screenshot or a GitHub issue.
 
 ## Update an earlier checkout
 
@@ -44,9 +45,43 @@ Both paths remain ignored by Git. If both files exist, compare them privately an
 5. On the iPhone, enable **Settings → Privacy & Security → Developer Mode**. Restart and confirm **Turn On** when prompted.
 6. In Xcode’s toolbar, select the **Mural** scheme and your iPhone as the destination. Click **Run** or press **⌘R**. If macOS requests access to the signing key, allow Xcode to use it.
 7. If iOS blocks the first launch because the developer is untrusted, open **Settings → General → VPN & Device Management**, select your developer profile, and tap **Trust**. Return to Xcode and run again.
-8. Choose your learning and subtitle languages in the welcome screens. In **Settings → Advanced → Use your own API key**, save your OpenAI project key. Tap the main conversation button and allow microphone access.
+8. Choose your learning and subtitle languages in the welcome screens. Configure conversation access below, then tap the main conversation button and allow microphone access.
 
 Mural should greet you aloud. Disconnect the cable and confirm a short conversation over Wi-Fi or cellular.
+
+## Configure the private server
+
+The private conversation endpoint is **https://mural-simple-chat-service.onrender.com**.
+
+1. In Render, open your service's **Environment** settings. Set `APIKEY` to a
+   private random value of 32 to 512 non-whitespace ASCII characters.
+2. Also set `SESSION_SIGNING_SECRET` to a separate random value of at least
+   32 characters. Keep it stable on the server so existing close handles remain valid.
+3. On the iPhone, open **Mural Settings → Advanced → Conversation access → Private server**.
+4. In **Private server APIKEY**, enter the exact Render `APIKEY` value, then tap
+   **Save & use private server**. It is saved in a separate, device-only Keychain
+   entry scoped to this host, not in a backup or source file.
+
+**Only `APIKEY` belongs on the iPhone. `SESSION_SIGNING_SECRET` and Azure resource
+keys stay in Render and are never entered into or sent by the app.**
+
+Private conversations bypass Mural sign-in, balances and purchases. Voice session
+setup, closure and teaching helpers use the private gateway; audio and live
+events flow directly to Azure over WebRTC. Learning history remains on the iPhone.
+There is no wake-up polling or automatic retry of potentially billed requests.
+Search-dependent current topics and delegated lookups report unavailable when
+the server advertises `webSearch: false`; ordinary talking and teaching helpers
+remain available.
+
+New installations default to Private server. Existing installations retain their
+saved conversation-access selection; select Private server explicitly when
+upgrading. Existing Mural minutes and personal OpenAI-key options remain.
+For direct OpenAI access, choose **My API key** and use its separate key screen.
+
+The gateway API is already deployed separately; these client changes require no
+new server routes or database migrations. A public health response does not
+verify Azure deployment access or the configured `APIKEY`. Native simulator and
+real-device voice verification still require a Mac with Xcode.
 
 ## Refresh a free installation
 
@@ -62,7 +97,9 @@ Use **Settings → Export learning backup** before changing your bundle identifi
 | The phone does not appear as a destination | Unlock it, check the cable, and open Devices and Simulators to finish pairing. |
 | Developer Mode is missing | Pair with Xcode first, then check Privacy & Security again. |
 | The app will not launch after a week | Refresh the build through Xcode without uninstalling. |
-| Key rejected or model unavailable | Check the key’s project, API billing, permissions and model access in OpenAI. |
+| Private server returns 401 | Match the saved private APIKEY to Render's `APIKEY`, not `SESSION_SIGNING_SECRET` or an Azure key. |
+| Private server rejects a model request | Check the Azure deployments, region, credentials and quotas on Render; the app does not choose the deployment. |
+| Personal OpenAI key rejected or model unavailable | Check the key’s project, API billing, permissions and model access in OpenAI. |
 | No microphone input | Enable Mural under iPhone Settings → Privacy & Security → Microphone. |
 | Sound uses the wrong output | Check iOS’s current audio destination; disconnect an unwanted Bluetooth route. |
 | A connection fails on cellular | Confirm Mural is allowed to use cellular data and retry with a stable connection. |
