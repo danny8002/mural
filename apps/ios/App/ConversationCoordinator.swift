@@ -8,7 +8,18 @@ import MuralCore
 @MainActor @Observable final class ConversationCoordinator {
     let store: LearningStore
     private(set) var state: ConnectionState = .idle
-    private(set) var session: SessionRecord?
+    private(set) var session: SessionRecord? {
+        didSet {
+            guard oldValue?.id != session?.id || oldValue?.fragments != session?.fragments else { return }
+            let passages = session?.passages ?? []
+            assistantPassage = passages.last { $0.speaker == .assistant }
+            userPassage = passages.last { $0.speaker == .user }
+            assistantCaption = assistantPassage?.text
+        }
+    }
+    private(set) var assistantPassage: Passage?
+    private(set) var userPassage: Passage?
+    private var assistantCaption: String?
     var selectedTheme: ConversationTheme?
     var targetCaptionFollowing = CaptionFollowing()
     var meaningCaptionFollowing = CaptionFollowing()
@@ -151,9 +162,7 @@ import MuralCore
     }
     var isRunning: Bool { state == .active || state == .connecting || state == .closing }
     var language: LanguageModule { store.language }
-    var assistantPassage: Passage? { session?.passages.last(where: { $0.speaker == .assistant }) }
-    var userPassage: Passage? { session?.passages.last(where: { $0.speaker == .user }) }
-    var caption: String { assistantPassage?.text ?? language.greeting }
+    var caption: String { assistantCaption ?? language.greeting }
     var status: String {
         if state == .active, let seconds = inactivitySeconds { return "Ending in \(seconds)s\nReply to continue" }
         return switch state {
