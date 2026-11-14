@@ -113,7 +113,6 @@ import MuralCore
             ?? .privateServer
         #endif
         let api = APIClient(); self.api = api
-        api.conversationProvider = conversationProvider
         api.canProcessAI = { store.preferences.aiConsentVersion == AIProcessingConsent.version || AudioVerification.requested }
         finalAssessments = FinalAssessmentQueue { snapshot, passage in
             guard store.preferences.aiConsentVersion == AIProcessingConsent.version || AudioVerification.requested else { throw AIProcessingConsent.ConsentError.required }
