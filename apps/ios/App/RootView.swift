@@ -13,8 +13,7 @@ struct RootView: View {
         #endif
         _coordinator = State(initialValue: coordinator)
     }
-    var body: some View {
-        @Bindable var coordinator = coordinator
+    private var tabs: some View {
         TabView(selection: $tab) {
             Tab("Talk", systemImage: "waveform", value: 0) { shell { TalkView(coordinator: coordinator) } }
             Tab("Themes", systemImage: "square.grid.2x2", value: 1) {
@@ -22,41 +21,22 @@ struct RootView: View {
             }
             Tab("Words", systemImage: "book", value: 2) { shell { WordsView(coordinator: coordinator) } }
         }
+    }
+    var body: some View {
+        @Bindable var coordinator = coordinator
+        tabs
         .tint(MuralColor.ink)
         .sheet(isPresented: $coordinator.showSettings, onDismiss: { Task { await coordinator.refreshContinuation() } }) {
             SettingsView(coordinator: coordinator)
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $coordinator.showAIConsent, onDismiss: { coordinator.resumeAfterAIConsent() }) {
-            AIConsentView(agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
+            AIConsentView(provider: coordinator.conversationProvider,
+                          agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
         }
         .fullScreenCover(isPresented: $onboarding) { OnboardingView(coordinator: coordinator) { coordinator.store.updatePreferences { $0.hasOnboarded = true }; onboarding = false } }
         .alert("A little interruption", isPresented: Binding(get: { coordinator.error != nil || coordinator.store.error != nil }, set: { if !$0 { coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil } })) {
-            if coordinator.personalKeyFailure != nil {
-                Button("Review in Advanced") {
-                    coordinator.error = nil; coordinator.store.error = nil
-                    coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
-                }
-            }
-            if let hostedFailure = coordinator.hostedAccessFailure {
-                if case .noMinutes = hostedFailure {
-                    Button("Check minutes") {
-                        coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil
-                        coordinator.requestAccountFocus = true; coordinator.showSettings = true
-                    }
-                }
-                if hostedFailure.needsSignInRecovery {
-                    Button("Sign in") {
-                        coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil
-                        coordinator.requestAccountFocus = true; coordinator.showSettings = true
-                    }
-                }
-                Button("Use my API key") {
-                    coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil
-                    coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
-                }
-            }
-            Button("OK", role: .cancel) { coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil }
+            interruptionActions
         } message: { Text(coordinator.error ?? coordinator.store.error ?? "") }
         .task { coordinator.resume(); AppleMinutePurchases.shared.start(); await HostedCloseRecovery.shared.resume() }
         .onChange(of: HostedCloseRecovery.shared.revision) { _, _ in Task { await coordinator.refreshContinuation() } }
@@ -71,7 +51,7 @@ struct RootView: View {
             #endif
             onboarding = !coordinator.store.preferences.hasOnboarded && !arguments.contains("--preview") && !AudioVerification.requested
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase, initial: false) { _, phase in
             if phase == .background { coordinator.background(); HostedCloseRecovery.shared.pause() }
             else if phase == .active { coordinator.resume(); Task { await HostedCloseRecovery.shared.resume(); await AppleMinutePurchases.shared.checkPurchases() } }
         }
@@ -96,9 +76,44 @@ struct RootView: View {
             if AudioVerification.requested { await AudioVerification.run(coordinator) }
             else if ProcessInfo.processInfo.arguments.contains("--ended-conversation") { coordinator.prepareConversationPreview(active: false) }
             else if ProcessInfo.processInfo.arguments.contains("--active-conversation") { coordinator.prepareConversationPreview(active: true) }
+            #if targetEnvironment(simulator)
             if ProcessInfo.processInfo.arguments.contains("--preview-caption-following") { await coordinator.runCaptionFollowingPreview() }
+            #endif
         }
         #endif
+    }
+    @ViewBuilder private var interruptionActions: some View {
+        if coordinator.personalKeyFailure != nil {
+            Button("Review in Advanced") {
+                coordinator.error = nil; coordinator.store.error = nil
+                coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
+            }
+            if coordinator.conversationProvider == .privateServer {
+                Button("Review private server APIKEY") {
+                    coordinator.error = nil; coordinator.store.error = nil
+                    coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
+                }
+            }
+        }
+        if let hostedFailure = coordinator.hostedAccessFailure {
+            if case .noMinutes = hostedFailure {
+                Button("Check minutes") {
+                    coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil
+                    coordinator.requestAccountFocus = true; coordinator.showSettings = true
+                }
+            }
+            if hostedFailure.needsSignInRecovery {
+                Button("Sign in") {
+                    coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil
+                    coordinator.requestAccountFocus = true; coordinator.showSettings = true
+                }
+            }
+            Button("Use my API key") {
+                coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil
+                coordinator.requestAdvancedFocus = true; coordinator.showSettings = true
+            }
+        }
+        Button("OK", role: .cancel) { coordinator.error = nil; coordinator.store.error = nil; coordinator.hostedAccessFailure = nil }
     }
     private func shell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         NavigationStack {

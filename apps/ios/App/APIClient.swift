@@ -10,7 +10,14 @@ struct APIUsage { var input = 0; var output = 0; var searches = 0 }
 struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUsage }
 
 @MainActor final class APIClient {
-    var conversationProvider: ConversationProvider = .personalKey
+    var conversationProvider: ConversationProvider = .privateServer {
+        didSet {
+            guard oldValue != conversationProvider else { return }
+            credentialExpiry?.cancel(); voiceCredential.clear()
+            privateChat.clearCredential()
+        }
+    }
+    let privateChat = PrivateChatClient()
     var hostedLease: HostedLease?
     var canProcessAI: () -> Bool = { true }
     private var responseTasks: [UUID: Task<APIResult, Error>] = [:]
@@ -22,12 +29,14 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
     private var voiceCredential = VoiceCredentialScope()
     private var credentialExpiry: Task<Void, Never>?
     func beginVoiceCredential() {
+        if conversationProvider == .privateServer { privateChat.beginConversation(); return }
         credentialExpiry?.cancel(); voiceCredential.clear()
         guard let key = CredentialStore.read() else { return }
         voiceCredential.begin(key: key)
         expireVoiceCredential(after: .seconds(65 * 60))
     }
     func endVoiceCredential() {
+        if conversationProvider == .privateServer { privateChat.endConversation(); return }
         voiceCredential.end()
         expireVoiceCredential(after: .seconds(60))
     }
@@ -50,6 +59,7 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
     }
     func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
         guard canProcessAI() else { throw AIProcessingConsent.ConsentError.required }
+        guard conversationProvider == .personalKey else { throw APIError.invalidResponse }
         guard let key = personalKey() else { throw APIError.missingKey }
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/" + path)!)
         request.httpMethod = "POST"; request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
@@ -89,17 +99,25 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
             onText?(result.text)
             return result
         }
-        var body: [String: Any] = ["model": "gpt-6-luna", "store": false, "instructions": instructions,
-                                  "input": [["role": "user", "content": input]], "max_output_tokens": schema == nil ? 1400 : 2200,
-                                  "reasoning": ["effort": "low"]]
-        if let schema { body["text"] = ["format": ["type": "json_schema", "name": "mural_result", "strict": true, "schema": schema]] }
-        if search { body["tools"] = [["type": "web_search"]]; body["tool_choice"] = "auto"; body["max_tool_calls"] = 1 }
         let json: [String: Any]
-        if let onText {
-            body["stream"] = true
-            json = try await streamResponse(body: body, onText: onText)
-        } else { json = try await post("responses", body: body) }
-        guard json["status"] as? String == "completed" else { throw APIError.incomplete }
+        if conversationProvider == .privateServer {
+            json = try await privateChat.respond(instructions: instructions, input: input, purpose: purpose,
+                                                 schema: schema, search: search, onText: onText)
+        } else {
+            var body: [String: Any] = ["model": "gpt-6-luna", "store": false, "instructions": instructions,
+                                      "input": [["role": "user", "content": input]], "max_output_tokens": schema == nil ? 1400 : 2200,
+                                      "reasoning": ["effort": "low"]]
+            if let schema { body["text"] = ["format": ["type": "json_schema", "name": "mural_result", "strict": true, "schema": schema]] }
+            if search { body["tools"] = [["type": "web_search"]]; body["tool_choice"] = "auto"; body["max_tool_calls"] = 1 }
+            if let onText {
+                body["stream"] = true
+                json = try await streamResponse(body: body, onText: onText)
+            } else { json = try await post("responses", body: body) }
+        }
+        guard json["status"] as? String == "completed" else {
+            if conversationProvider == .privateServer { throw PrivateChatError.invalidResponse }
+            throw APIError.incomplete
+        }
         var text = "", sources: [SourceLink] = [], usage = APIUsage()
         for item in json["output"] as? [[String: Any]] ?? [] {
             if item["type"] as? String == "web_search_call" { usage.searches += 1 }
@@ -114,7 +132,10 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
             }
         }
         if let u = json["usage"] as? [String: Any] { usage.input = u["input_tokens"] as? Int ?? 0; usage.output = u["output_tokens"] as? Int ?? 0 }
-        guard !text.isEmpty else { throw APIError.incomplete }
+        guard !text.isEmpty else {
+            if conversationProvider == .privateServer { throw PrivateChatError.invalidResponse }
+            throw APIError.incomplete
+        }
         return APIResult(text: text, sources: sources, usage: usage)
     }
     private func streamResponse(body: [String: Any], onText: @MainActor (String) -> Void) async throws -> [String: Any] {

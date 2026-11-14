@@ -3,7 +3,7 @@ import Security
 import CryptoKit
 import MuralCore
 
-enum ConversationProvider: String, Hashable { case hosted, personalKey }
+enum ConversationProvider: String, Hashable { case hosted, personalKey, privateServer }
 
 enum HostedError: LocalizedError {
     case unavailable, invalidResponse, secureStorage, signInRequired, noMinutes, unconfirmed, personalKeyRequired, server(String, retryable: Bool)

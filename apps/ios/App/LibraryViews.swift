@@ -76,7 +76,9 @@ struct CurrentTopicView: View {
                         Button("Talk about this", systemImage: "waveform") { coordinator.discuss(brief); selected(); dismiss() }
                             .font(.headline).padding(18).frame(maxWidth: .infinity).background(MuralColor.orange, in: Capsule())
                     }
-                    Text("Current topics use your API key outside a conversation. Sources stay attached to the topic.").font(.footnote).foregroundStyle(MuralColor.secondary)
+                    Text(coordinator.conversationProvider == .privateServer
+                         ? "Current topics require web search to be enabled on your private server. Sources stay attached to the topic."
+                         : "Current topics use your API key outside a conversation. Sources stay attached to the topic.").font(.footnote).foregroundStyle(MuralColor.secondary)
                 }.padding(26)
             }.background(MuralColor.cream).foregroundStyle(MuralColor.ink)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
@@ -306,7 +308,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var account = ManagedAccountStore()
     @State private var hasKey = Self.initialHasKey()
+    @State private var hasPrivateKey = Self.initialHasPrivateKey()
     @State private var showingKey = false
+    @State private var showingPrivateKey = false
     @State private var saveAndUseKey = false
     @State private var confirmingPersonalKey = false
     @State private var showingHostedSwitch = false
@@ -362,12 +366,21 @@ struct SettingsView: View {
                 }
                 Section {
                     Picker("Conversation access", selection: Binding(get: { coordinator.conversationProvider }, set: chooseProvider)) {
+                        Text("Private server").tag(ConversationProvider.privateServer)
                         Text("Mural minutes").tag(ConversationProvider.hosted)
                         Text("My API key").tag(ConversationProvider.personalKey)
                     }.pickerStyle(.menu).disabled(coordinator.isRunning)
                         .accessibilityIdentifier("settings-conversation-access")
                     if coordinator.conversationProvider == .personalKey {
                         Text("No Mural minute limit. OpenAI bills your account for usage.")
+                            .font(.footnote).foregroundStyle(MuralColor.secondary)
+                    }
+                    if coordinator.conversationProvider == .privateServer {
+                        LabeledContent("Server", value: PrivateChatProtocol.origin.host ?? "")
+                        Button { showingPrivateKey = true } label: {
+                            LabeledContent("Private server APIKEY", value: hasPrivateKey ? "Saved on this iPhone" : "Key required")
+                        }.disabled(coordinator.isRunning).accessibilityIdentifier("private-server-key-settings")
+                        Text("No Mural account or minutes required. Your server uses Azure OpenAI.")
                             .font(.footnote).foregroundStyle(MuralColor.secondary)
                     }
                     if hasKey || coordinator.conversationProvider == .personalKey {
@@ -434,6 +447,9 @@ struct SettingsView: View {
             }
         }
         .sheet(isPresented: $showingHostedSwitch) { HostedAccessSwitchView(coordinator: coordinator) }
+        .sheet(isPresented: $showingPrivateKey) {
+            NavigationStack { PrivateServerKeyView(coordinator: coordinator, hasKey: $hasPrivateKey) }
+        }
         .sheet(isPresented: $showingAIProcessing) {
             AIProcessingSettingsView(coordinator: coordinator)
         }
@@ -445,7 +461,10 @@ struct SettingsView: View {
     }
     private func chooseProvider(_ provider: ConversationProvider) {
         guard !coordinator.isRunning, provider != coordinator.conversationProvider else { return }
-        if provider == .hosted { showingHostedSwitch = true }
+        if provider == .privateServer {
+            coordinator.selectConversationProvider(.privateServer)
+            showingPrivateKey = true
+        } else if provider == .hosted { showingHostedSwitch = true }
         else if hasKey { confirmingPersonalKey = true }
         else { saveAndUseKey = true; showingKey = true }
     }
@@ -456,6 +475,78 @@ struct SettingsView: View {
         }
         #endif
         return CredentialStore.hasKey
+    }
+    private static func initialHasPrivateKey() -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--preview") { return false }
+        #endif
+        return PrivateChatCredentialStore.hasKey
+    }
+}
+
+private struct PrivateServerKeyView: View {
+    let coordinator: ConversationCoordinator
+    @Binding var hasKey: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var key = ""
+    @State private var message: String?
+    @State private var removing = false
+
+    var body: some View {
+        Form {
+            Section {
+                Text(PrivateChatProtocol.origin.absoluteString).font(.footnote).textSelection(.enabled)
+                LabeledContent("APIKEY", value: hasKey ? "Saved on this iPhone" : "Key required")
+                SecureField(hasKey ? "Replacement APIKEY" : "APIKEY from Render", text: $key)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
+                    .accessibilityIdentifier("private-server-apikey")
+                Button("Save & use private server") {
+                    do {
+                        #if DEBUG && targetEnvironment(simulator)
+                        if !ProcessInfo.processInfo.arguments.contains("--preview") {
+                            try PrivateChatCredentialStore.save(key.trimmingCharacters(in: .whitespacesAndNewlines))
+                        }
+                        #else
+                        try PrivateChatCredentialStore.save(key.trimmingCharacters(in: .whitespacesAndNewlines))
+                        #endif
+                        key = ""; hasKey = true
+                        coordinator.privateServerKeyChanged()
+                        coordinator.selectConversationProvider(.privateServer)
+                        message = "APIKEY saved. Talk and teaching helpers will use your private server."
+                    } catch { message = error.localizedDescription }
+                }.disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coordinator.isRunning)
+                    .accessibilityIdentifier("private-server-save-key")
+                if hasKey {
+                    Button("Remove APIKEY", role: .destructive) { removing = true }
+                        .disabled(coordinator.isRunning)
+                }
+            } footer: {
+                Text("Enter the APIKEY environment value from your Render service. It stays in this iPhone's Keychain and goes only to the server shown above. Never enter SESSION_SIGNING_SECRET or an Azure resource key here.")
+            }
+            Section("AI processing") {
+                Text("Session setup and selected text pass through your private server to Azure OpenAI. Voice audio goes directly to Azure over WebRTC. Provider retention rules apply. Learning history stays on this iPhone.")
+                Text("SESSION_SIGNING_SECRET is server-only. Configure it in Render, not in this app.")
+                    .font(.footnote).foregroundStyle(MuralColor.secondary)
+            }
+            if let message { Section { Text(message).foregroundStyle(MuralColor.secondary) } }
+        }.scrollContentBackground(.hidden).background(MuralColor.cream)
+            .navigationTitle("Private server APIKEY").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { key = ""; dismiss() } } }
+            .confirmationDialog("Remove private server APIKEY?", isPresented: $removing, titleVisibility: .visible) {
+                Button("Remove APIKEY", role: .destructive) {
+                    do {
+                        #if DEBUG && targetEnvironment(simulator)
+                        if !ProcessInfo.processInfo.arguments.contains("--preview") {
+                            try PrivateChatCredentialStore.delete()
+                        }
+                        #else
+                        try PrivateChatCredentialStore.delete()
+                        #endif
+                        key = ""; hasKey = false; coordinator.privateServerKeyChanged()
+                        message = "APIKEY removed. Private conversations will wait for a new key."
+                    } catch { message = error.localizedDescription }
+                }
+            }
     }
 }
 
@@ -585,7 +676,7 @@ private struct HostedAccessSwitchView: View {
                             switchTask = Task {
                                 checking = true
                                 guard let latest = await coordinator.hostedBalanceForSwitch(), latest.canStart,
-                                      !Task.isCancelled, coordinator.conversationProvider == .personalKey,
+                                      !Task.isCancelled, coordinator.conversationProvider != .hosted,
                                       !coordinator.isRunning else {
                                     self.available = nil; failed = true; checking = false; return
                                 }
