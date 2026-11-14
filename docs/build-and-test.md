@@ -24,6 +24,14 @@ xcodebuild -project apps/ios/Mural.xcodeproj -scheme Mural \
 
 The core suite covers evidence validation, transcript revisions, language isolation, recall spacing, archive validation, translation cancellation, and managed-account configuration and security parsing. Native UI tests exercise the screens with in-memory data. Neither suite needs an API key. Configured provider sign-in and account deletion need the separate device checks in [managed accounts](managed-accounts.md).
 
+Caption performance regressions are covered by `CaptionAssemblyTests` (long
+transcripts compared with the original grouping algorithm) and the native
+`testCaptionsFollowPauseAcrossStreamingAndResumeNextReply` and
+`testCaptionPauseSurvivesMeaningVisibilityAndNavigation` tests. Caption scrolling
+uses prebuilt content, and following pauses while the scene is inactive without
+resetting the passage or its touch-paused state. The coordinator refreshes its
+latest-passage cache only when session identity or fragments change.
+
 ## Check the Android port and the cross-platform contracts
 
 ```sh

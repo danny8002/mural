@@ -71,16 +71,21 @@ public enum Transcript {
     /// Presentation grouping only: neither the gap nor the arrival of another speaker proves a completed turn.
     public static func passages(_ fragments: [Fragment]) -> [Passage] {
         var result: [Passage] = []
+        var latest: [Speaker: Int] = [:]
+        var ends: [Int] = []
         let indexed = fragments.enumerated().sorted {
             $0.element.startMS == $1.element.startMS ? $0.offset < $1.offset : $0.element.startMS < $1.element.startMS
         }
         for (_, fragment) in indexed {
-            if let i = result.lastIndex(where: { $0.speaker == fragment.speaker }),
-               fragment.startMS - result[i].endMS <= 2200,
+            if let i = latest[fragment.speaker],
+               fragment.startMS - ends[i] <= 2200,
                !fragment.typed, !(result[i].fragments.last?.typed ?? false) {
                 result[i].fragments.append(fragment)
+                ends[i] = max(ends[i], fragment.endMS)
             } else {
+                latest[fragment.speaker] = result.count
                 result.append(Passage(id: fragment.id, speaker: fragment.speaker, fragments: [fragment]))
+                ends.append(fragment.endMS)
             }
         }
         return result.sorted { $0.startMS < $1.startMS }

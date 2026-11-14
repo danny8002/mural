@@ -1214,6 +1214,12 @@ final class MuralUITests: XCTestCase {
         app.tabBars.buttons["Talk"].tap()
         XCTAssertTrue((target.value as? String ?? "").contains("paused"))
         XCTAssertTrue((meaning.value as? String ?? "").contains("paused"))
+        let paused = target.value as? String
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+        XCTAssertEqual(target.value as? String, paused)
+        XCTAssertTrue((meaning.value as? String ?? "").contains("paused"))
     }
 
     func testCaptionsFollowPauseAcrossStreamingAndResumeNextReply() {

@@ -232,11 +232,11 @@ struct TalkView: View {
                     if coordinator.store.preferences.meaningVisible { meaningPassage }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                followingPassage(text: coordinator.caption) { targetPassage }
+                followingPassage { targetPassage }
                     .frame(height: targetLineHeight * 3 + (coordinator.language.id == "zh" ? 58 : 0))
                     .accessibilityIdentifier("target-passage-scroll")
                 if coordinator.store.preferences.meaningVisible {
-                    followingPassage(text: coordinator.meaning, isMeaning: true) { meaningPassage }
+                    followingPassage(isMeaning: true) { meaningPassage }
                         .frame(height: meaningLineHeight * 3 + (coordinator.meaningError == nil ? 0 : 60))
                         .accessibilityIdentifier("meaning-passage-scroll")
                 }
@@ -285,17 +285,18 @@ struct TalkView: View {
             }
         }.font(.footnote).frame(maxWidth: .infinity)
     }
-    private func followingPassage<Content: View>(text: String, isMeaning: Bool = false, @ViewBuilder content: @escaping () -> Content) -> some View {
+    private func followingPassage<Content: View>(isMeaning: Bool = false, @ViewBuilder content: () -> Content) -> some View {
         let following = Binding(get: { isMeaning ? coordinator.meaningCaptionFollowing : coordinator.targetCaptionFollowing },
                                 set: { if isMeaning { coordinator.meaningCaptionFollowing = $0 } else { coordinator.targetCaptionFollowing = $0 } })
         return FollowingPassage(passageID: coordinator.session.map { $0.id.uuidString + ":" + (coordinator.assistantPassage?.id ?? "") },
-                                text: text, content: content, following: following)
+                                content: content(), following: following)
     }
     private var linkedCaption: AttributedString {
         var result = AttributedString()
+        let hasAssistantPassage = coordinator.assistantPassage != nil
         for segment in CaptionWords.segments(coordinator.caption, languageID: coordinator.language.id) {
             var part = AttributedString(segment.text)
-            if coordinator.assistantPassage != nil, let word = segment.lookup {
+            if hasAssistantPassage, let word = segment.lookup {
                 var components = URLComponents(); components.scheme = "mural-word"; components.host = "lookup"
                 components.queryItems = [URLQueryItem(name: "word", value: word)]
                 part.link = components.url
@@ -410,10 +411,10 @@ struct TypedReplyView: View {
 /// The viewport stays put; the text advances at a reading pace until touched.
 private struct FollowingPassage<Content: View>: View {
     let passageID: String?
-    let text: String
-    @ViewBuilder let content: () -> Content
+    let content: Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.scenePhase) private var scenePhase
     @Binding var following: CaptionFollowing
     @State private var position = ScrollPosition(y: 0)
     @State private var offset = 0.0
@@ -429,7 +430,7 @@ private struct FollowingPassage<Content: View>: View {
     var body: some View {
         GeometryReader { viewport in
             ScrollView {
-                content().frame(maxWidth: .infinity).frame(minHeight: viewport.size.height)
+                content.frame(maxWidth: .infinity).frame(minHeight: viewport.size.height)
             }
             .scrollPosition($position)
             .scrollIndicators(.hidden)
@@ -444,7 +445,9 @@ private struct FollowingPassage<Content: View>: View {
             .task(id: passageID) {
                 following.receive(passageID)
                 position.scrollTo(y: 0)
-                guard passageID != nil else { return }
+            }
+            .task(id: scenePhase == .active ? passageID : nil) {
+                guard scenePhase == .active, passageID != nil else { return }
                 do {
                     try await Task.sleep(for: .milliseconds(900))
                     while !Task.isCancelled {

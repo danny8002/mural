@@ -259,7 +259,7 @@ def check_prompts(swift_path, kotlin_path):
 # Only constants extractable with one small, unambiguous regex per side are listed here.
 CONSTANTS = [
     ('transcript_gap_ms', 'scalar',
-     ('apps/ios/Core/Models.swift', r'fragment\.startMS - result\[i\]\.endMS <= (\d[\d_]*)'),
+     ('apps/ios/Core/Models.swift', r'fragment\.startMS - (?:result\[i\]\.endMS|ends\[i\]) <= (\d[\d_]*)'),
      ('apps/android/app/src/main/java/chat/mural/core/Models.kt', r'f\.startMS - p\.endMS <= (\d[\d_]*)')),
     ('redirect_confidence', 'scalar',
      ('apps/ios/Core/TeachingPolicy.swift', r'confidence > (\d+\.\d+)'),

@@ -2,6 +2,55 @@ import XCTest
 @testable import MuralCore
 
 final class CaptionAssemblyTests: XCTestCase {
+    func testGroupingPreservesOverlapsEqualTimestampsAndTypedBoundaries() {
+        let fragments = [
+            Fragment(id: "later", speaker: .assistant, text: "later", startMS: 2300, endMS: 2400),
+            Fragment(id: "long", speaker: .assistant, text: "long ", startMS: 0, endMS: 3000),
+            Fragment(id: "short", speaker: .assistant, text: "short ", startMS: 10, endMS: 20),
+            Fragment(id: "user", speaker: .user, text: "hello", startMS: 10, endMS: 100),
+            Fragment(id: "typed", speaker: .assistant, text: "typed", startMS: 2400, endMS: 2401, typed: true),
+            Fragment(id: "voice", speaker: .assistant, text: "voice", startMS: 2401, endMS: 2500),
+            Fragment(id: "gap", speaker: .assistant, text: "gap", startMS: 4701, endMS: 4800)
+        ]
+        let passages = Transcript.passages(fragments)
+        XCTAssertEqual(passages.map(\.id), ["long", "user", "typed", "voice", "gap"])
+        XCTAssertEqual(passages[0].fragments.map(\.id), ["long", "short", "later"])
+        XCTAssertEqual(passages[0].endMS, 3000)
+    }
+
+    func testLongTranscriptMatchesOriginalGrouping() {
+        let fragments = (0..<2500).map { index in
+            Fragment(id: "\(index)", speaker: index % 3 == 0 ? .user : .assistant,
+                     text: "word ", startMS: index * 10, endMS: index * 10 + (index % 17 == 0 ? 500 : 5),
+                     typed: index % 101 == 0)
+        }.reversed()
+        let input = Array(fragments)
+        let referenceStart = ContinuousClock.now
+        var reference: [Passage] = []
+        let indexed = input.enumerated().sorted {
+            $0.element.startMS == $1.element.startMS ? $0.offset < $1.offset : $0.element.startMS < $1.element.startMS
+        }
+        for (_, fragment) in indexed {
+            if let i = reference.lastIndex(where: { $0.speaker == fragment.speaker }),
+               fragment.startMS - reference[i].endMS <= 2200,
+               !fragment.typed, !(reference[i].fragments.last?.typed ?? false) {
+                reference[i].fragments.append(fragment)
+            } else {
+                reference.append(Passage(id: fragment.id, speaker: fragment.speaker, fragments: [fragment]))
+            }
+        }
+        reference.sort { $0.startMS < $1.startMS }
+        let referenceTime = referenceStart.duration(to: .now)
+        let optimizedStart = ContinuousClock.now
+        let actual = Transcript.passages(input)
+        let optimizedTime = optimizedStart.duration(to: .now)
+        print("Transcript grouping: original \(referenceTime), optimized \(optimizedTime)")
+        XCTAssertEqual(actual.map(\.id), reference.map(\.id))
+        XCTAssertEqual(actual.map(\.fragments), reference.map(\.fragments))
+        XCTAssertEqual(actual.map(\.revisionKey), reference.map(\.revisionKey))
+        XCTAssertEqual(actual.map(\.text), reference.map(\.text))
+    }
+
     func testEverySupportedLanguagePreservesWordFragments() {
         let examples: [(String, [String], String)] = [
             ("nb", ["Hygg", "elig! Jeg liker fri", "lufts", "liv."], "Hyggelig! Jeg liker friluftsliv."),
