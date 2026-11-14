@@ -127,6 +127,16 @@ class ConstantsTests(unittest.TestCase):
             self.assertTrue(failures[0].startswith('constants:'))
             self.assertIn('transcript_gap_ms', failures[0])
 
+    def test_cached_passage_end_still_checks_gap_parity(self):
+        for kotlin_gap in (2200, 2500):
+            with self.subTest(kotlin_gap=kotlin_gap), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                self.write_models(root, 2200, kotlin_gap)
+                path = root / 'apps/ios/Core/Models.swift'
+                path.write_text(path.read_text().replace('result[i].endMS', 'ends[i]'))
+                failures = ccp.check_constants(root, self.GAP_ONLY)
+                self.assertEqual(len(failures), 0 if kotlin_gap == 2200 else 1)
+
     def test_missing_constant_file_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
